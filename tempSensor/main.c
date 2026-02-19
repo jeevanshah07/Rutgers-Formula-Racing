@@ -7,6 +7,8 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#define MAX_FILENAME 64
+
 #define NUM_MULTIPLEXERS 3
 #define NUM_DATA_POINTS 500 // number of data points
 #define NUM_CHANNELS 32     // number of channels
@@ -17,13 +19,22 @@ int thermal_runaways[10];
 
 static float Calculate_Channel_Mean(uint8_t channel);
 static float Get_Channel_Temp(uint8_t channel, uint8_t poll_number);
-static float Get_Random_Mean(float arr[], int n);
+static float Voltage_to_Temperature(float voltage);
 static bool Is_Thermal_Runaway(float data[], int n, int k);
-static void Get_Data();
+static void Get_Data(uint8_t n);
 static void Delay(int ms);
 static void Save_Temp(int i);
 
 static void Delay(int ms) { usleep(ms * 1000); }
+
+// convert voltage to temperature based on pre-calculated regression equation
+static float Voltage_to_Temperature(float voltage) {
+  return (((-6.2994E-9f * voltage + 1.53618E-6f) * voltage - 0.0000569765f) *
+              voltage -
+          0.0116001f) *
+             voltage +
+         2.16332f;
+}
 
 // get the gradient of an array in units/seconds using least squares
 bool Is_Thermal_Runaway(float data[], int n, int k) {
@@ -61,31 +72,24 @@ bool Is_Thermal_Runaway(float data[], int n, int k) {
   return false;
 }
 
-// selects n/4 random values from the array and then takes the average
-static float Get_Random_Mean(float arr[], int n) {
-  int k = n / 4;
-  float sum = 0;
+// reads in data from provided file
+static void Get_Data(uint8_t n) {
+  char file_name[MAX_FILENAME];
 
-  srand(time(NULL));
+  snprintf(file_name, sizeof(file_name), "mux_%d_data.txt", n);
 
-  for (int i = 0; i < k; i++) {
-    int j = i + rand() % (n - i);
-
-    sum += arr[j];
-  }
-
-  return sum / (float)k;
-}
-
-static void Get_Data() {
   FILE *f;
   int height, width, i, j;
 
-  if ((f = fopen("data.txt", "r")) == NULL)
+  if ((f = fopen(file_name, "r")) == NULL) {
+    printf("file error - 85");
     exit(1);
+  }
 
-  if (fscanf(f, "%d%d", &height, &width) != 2)
+  if (fscanf(f, "%d%d", &height, &width) != 2) {
+    printf("file error - 90");
     exit(1);
+  }
 
   if (height < 1 || height > NUM_CHANNELS || width < 1 ||
       width > NUM_DATA_POINTS)
@@ -98,18 +102,20 @@ static void Get_Data() {
   fclose(f);
 }
 
+// read in data from a given sensor
 static float Get_Channel_Temp(uint8_t channel, uint8_t poll_number) {
   return arr[channel][poll_number];
 }
 
+// take the mean of every data point from a given channel
 static float Calculate_Channel_Mean(uint8_t channel) {
   float total = 0.0f;
 
-  for (int i = 0; i < 500; i++) {
+  for (int i = 0; i < NUM_DATA_POINTS; i++) {
     total += Get_Channel_Temp(channel, i);
   }
 
-  return (total / 500.0f);
+  return (total / (float)NUM_DATA_POINTS);
 }
 
 int main(void) {
@@ -119,17 +125,21 @@ int main(void) {
 
   gettimeofday(&start, NULL);
 
-  Get_Data();
+  char file_name[64];
 
   // loop to simulate the car running
-  for (int k = 0; k < 1000; k++) {
+  for (int k = 0; k < 10; k++) {
     // take the average temp of the entire system
     float total = 0;
 
     // in the actual program we'll use j to select the correct multiplexer
     for (int j = 0; j < NUM_MULTIPLEXERS; j++) {
+      // 'read' data from each set of sensors
+      Get_Data(j);
+
       // take the average temp of each mux
       float mux_total = 0;
+
       // iterate through the 32 channels on the multiplexer and get the mean of
       // the 500 data points
       for (int i = 0; i < NUM_CHANNELS; i++) {
@@ -150,8 +160,15 @@ int main(void) {
     // store the past 10 temperatures
     past_temps[k % 10] = (total / (float)3);
 
+    printf("\n\n------------PAST TEMPS------------\n\n");
+    for (int i = 0; i < 9; i++) {
+      printf("%10.1f", past_temps[i]);
+      printf("\n");
+    }
+
     // check for increasing gradient, if increasing toggle flag in array
     if (Is_Thermal_Runaway(past_temps, 10, k)) {
+      printf("runaway");
       exit(1);
     }
   }
@@ -161,7 +178,7 @@ int main(void) {
   microseconds = end.tv_usec - start.tv_usec;
   time_elapsed = seconds + microseconds * 1e-6;
 
-  printf("Execution time: %.6f seconds\n", time_elapsed);
+  printf("\nExecution time: %.6f seconds\n", time_elapsed);
 
   return 0;
 }
