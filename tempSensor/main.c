@@ -14,14 +14,14 @@
 #define NUM_CHANNELS 32     // number of channels
 
 float arr[NUM_CHANNELS][NUM_DATA_POINTS];
-float past_temps[10];
-int thermal_runaways[10];
+
+float highest[2] = {FLT_MIN, 0};
+float lowest[2] = {FLT_MAX, 0};
 
 static float Calculate_Channel_Mean(uint8_t channel);
 static float Get_Channel_Temp(uint8_t channel, uint8_t poll_number);
 static float Voltage_to_Temperature(float voltage);
-static bool Is_Thermal_Runaway(float data[], int n, int k);
-static void Get_Data(uint8_t n);
+static void Get_Data(int n);
 static void Delay(int ms);
 static void Save_Temp(int i);
 
@@ -36,44 +36,8 @@ static float Voltage_to_Temperature(float voltage) {
          2.16332f;
 }
 
-// get the gradient of an array in units/seconds using least squares
-bool Is_Thermal_Runaway(float data[], int n, int k) {
-  float sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-
-  for (int i = 0; i < n; i++) {
-    float x = (float)i;
-    float y = data[i];
-
-    sumX += x;
-    sumY += y;
-    sumXY += x * y;
-    sumX2 += x * x;
-  }
-
-  float denominator = (n * sumX2 - sumX * sumX) * 4e-6;
-  if (denominator == 0)
-    return 0;
-
-  if (((n * sumXY - sumX * sumY) / denominator) > 0) {
-    thermal_runaways[k % 10] = 1;
-  }
-
-  // if 8 of the past 10 gradients are increasing, probably thermal_runaways
-  // should probably also have a temp check....
-  int sum = 0;
-  for (int i = 0; i < 10; i++) {
-    sum += thermal_runaways[i];
-  }
-
-  if (sum > 8) {
-    return true;
-  }
-
-  return false;
-}
-
 // reads in data from provided file
-static void Get_Data(uint8_t n) {
+static void Get_Data(int n) {
   char file_name[MAX_FILENAME];
 
   snprintf(file_name, sizeof(file_name), "mux_%d_data.txt", n);
@@ -82,7 +46,7 @@ static void Get_Data(uint8_t n) {
   int height, width, i, j;
 
   if ((f = fopen(file_name, "r")) == NULL) {
-    printf("file error - 85");
+    perror(file_name);
     exit(1);
   }
 
@@ -128,49 +92,46 @@ int main(void) {
   char file_name[64];
 
   // loop to simulate the car running
-  for (int k = 0; k < 10; k++) {
+  for (int k = 0; k < 4; k++) {
     // take the average temp of the entire system
     float total = 0;
 
     // in the actual program we'll use j to select the correct multiplexer
     for (int j = 0; j < NUM_MULTIPLEXERS; j++) {
       // 'read' data from each set of sensors
-      Get_Data(j);
-
-      // take the average temp of each mux
-      float mux_total = 0;
+      Get_Data(3 * k + j);
 
       // iterate through the 32 channels on the multiplexer and get the mean of
       // the 500 data points
       for (int i = 0; i < NUM_CHANNELS; i++) {
         float mean = Calculate_Channel_Mean(i);
-        mux_total += mean;
+        total += mean;
 
-        printf("\n");
-        printf("%10.1f", mean);
-        Delay(3);
+        if (mean > highest[0]) {
+          highest[0] = mean;
+          highest[1] = (float)i;
+        }
+
+        if (mean < lowest[0]) {
+          lowest[0] = mean;
+          lowest[1] = (float)i;
+        }
+
+        Delay(3); // simulate settling time at ~3ms (slightly generous)
       }
 
-      total += (mux_total / (float)32);
-
-      // for each channel, take the random
-      printf("\n\n------------------------\n\n");
     }
+    total = (total / (float)96);
 
-    // store the past 10 temperatures
-    past_temps[k % 10] = (total / (float)3);
+    printf("Average: %3.1f \n", total);
 
-    printf("\n\n------------PAST TEMPS------------\n\n");
-    for (int i = 0; i < 9; i++) {
-      printf("%10.1f", past_temps[i]);
-      printf("\n");
-    }
+    printf("Highest: %3.1f (Sensor %.0f)\n", highest[0], highest[1]);
 
-    // check for increasing gradient, if increasing toggle flag in array
-    if (Is_Thermal_Runaway(past_temps, 10, k)) {
-      printf("runaway");
-      exit(1);
-    }
+    printf("Lowest: %3.1f (Sensor %.0f)\n", lowest[0], lowest[1]);
+    printf("\n\n------------------------\n\n");
+
+    highest[0] = FLT_MIN;
+    lowest[0] = FLT_MAX;
   }
 
   gettimeofday(&end, NULL);
