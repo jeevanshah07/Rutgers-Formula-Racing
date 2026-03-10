@@ -61,7 +61,7 @@ main-build: rfr26-tempSensor.elf secondary-outputs
 
 # Tool invocations
 rfr26-tempSensor.elf rfr26-tempSensor.map: $(OBJS) $(USER_OBJS) /Users/jeevanshah/STM32CubeIDE/workspace_1.19.0/rfr26-tempSensor/STM32F103T8UX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "rfr26-tempSensor.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"/Users/jeevanshah/STM32CubeIDE/workspace_1.19.0/rfr26-tempSensor/STM32F103T8UX_FLASH.ld" --specs=nosys.specs -Wl,-Map="rfr26-tempSensor.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+	arm-none-eabi-gcc -o "rfr26-tempSensor.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"/Users/jeevanshah/STM32CubeIDE/workspace_1.19.0/rfr26-tempSensor/STM32F103T8UX_FLASH.ld" --specs=nosys.specs -Wl,-Map="rfr26-tempSensor.map" -Wl,--gc-sections -static --specs=rdimon.specs -lc -lrdimon --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
