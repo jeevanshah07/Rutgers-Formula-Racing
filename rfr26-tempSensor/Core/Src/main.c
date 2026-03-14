@@ -230,6 +230,8 @@ static void Calculate_Module_Mean(TempStatistics_t *stats) {
       sum += temp;
       count++;
 
+      printf("Channel %u: %u", ch, temp);
+
       if (temp > stats->max_temp) {
         stats->max_temp = temp;
         stats->max_channel = ch;
@@ -340,14 +342,13 @@ int main(void) {
 
   while (1) {
 
-	printf("hello world\n");
 
     stats.max_temp = -32768;
     stats.min_temp = 32767;
     stats.num_enabled = 0;
 
-//    Calculate_Module_Mean(&stats);
-//    CAN_SendTemperatureStatistics(&stats);
+    Calculate_Module_Mean(&stats);
+    CAN_SendTemperatureStatistics(&stats);
   }
 }
 /* ---------------------------------------------------------------------------
