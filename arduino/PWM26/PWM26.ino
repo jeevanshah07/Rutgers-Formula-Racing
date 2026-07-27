@@ -6,27 +6,25 @@
  *   Timer 0 → D5, D6   untouched — reserved for millis() / delay()
  *   Timer 1 → D9       pump PWM, Phase Correct PWM, 500 Hz
  *   Timer 2 → D3       fan PWM,  Fast PWM,          25 kHz
- *                       D11 unavailable as output while Timer 2 is active
+ *                       D11 unavailable as PWM, but remains SPI MOSI
  *
  * ── PWM API ─────────────────────────────────────────────────────────────────
  *   setPumpDuty(uint8_t percent)   0–100
  *   setFanDuty(uint8_t percent)    0–100
  *
  * ── DAQ usage ───────────────────────────────────────────────────────────────
- *   1. Record data  → CLEAR_EEPROM true, DECODE false, daq true
- *                     Flash and run until "END EEPROM WRITE"
- *   2. Read data    → CLEAR_EEPROM false, DECODE true
- *                     Flash and open Serial Monitor
- *   3. Normal run   → CLEAR_EEPROM false, DECODE false, daq false
+ *   Temperature, fan duty, and pump duty are appended to PWM26.CSV on an
+ *   SPI SD card once per second. D10 is the SD card chip-select pin.
  */
 
 #include <math.h>
-#include <EEPROM.h>
+#include <SPI.h>
+#include <SD.h>
 
 // ── Build-time config ────────────────────────────────────────────────────────
-#define CLEAR_EEPROM  false
-#define DECODE        false
-#define DELTA_TIME    100     // ms between DAQ samples
+#define SD_CS_PIN     10
+#define LOG_INTERVAL  1000UL  // ms between SD-card samples
+#define LOG_FILENAME  "PWM26.CSV"
 
 // ── Pin assignments ──────────────────────────────────────────────────────────
 #define PUMP_PIN  9           // OC1A — Timer 1 Phase Correct PWM
@@ -52,10 +50,12 @@ const float TEMP_HIGH = 45.0;   // Above → fans full
 uint8_t pumpDuty = 20;
 uint8_t fanDuty  = 0;
 float   tC1      = 0.0;
-bool    daq      = false;
 
 unsigned long lastPrintTime = 0;
 const unsigned long printInterval = 500; // ms
+unsigned long lastLogTime = 0;
+bool sdReady = false;
+File logFile;
 
 // ════════════════════════════════════════════════════════════════════════════
 // Timer setup
@@ -142,20 +142,21 @@ void setFanDuty(uint8_t percent) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// EEPROM encode / decode
+// SD-card logging
 // ════════════════════════════════════════════════════════════════════════════
 
-// Store temperature as integer tenths of a degree (e.g. 36.5 C → 365)
-// Range: 0.0–80.0 C → 0–800
-uint16_t encodeTemp10(float tC) {
-  if (isnan(tC) || isinf(tC)) return 0;
-  tC = constrain(tC, 0.0f, 80.0f);
-  return (uint16_t)lroundf(tC * 10.0f);
-}
+void logSample(unsigned long timestamp, float temperature,
+               uint8_t fanPercent, uint8_t pumpPercent) {
+  if (!sdReady) return;
 
-float decodeTemp10(uint16_t value) {
-  if (value > 800) value = 800;
-  return value / 10.0f;
+  logFile.print(timestamp);
+  logFile.print(',');
+  logFile.print(temperature, 2);
+  logFile.print(',');
+  logFile.print(fanPercent);
+  logFile.print(',');
+  logFile.println(pumpPercent);
+  logFile.flush();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -201,38 +202,32 @@ void setup() {
 
 
 
-  // ── DECODE: dump EEPROM to Serial then halt ────────────────────────────
-  if (DECODE) {
-    Serial.println(F("\n\n========== START READ EEPROM =========="));
-
-    int sampleCount = EEPROM.length() / (int)sizeof(uint16_t);
-
-    for (int i = 0; i < sampleCount; i++) {
-      uint16_t encodedTemp;
-      EEPROM.get(i * (int)sizeof(uint16_t), encodedTemp);
-
-      Serial.print(F("Coolant Temp 3: "));
-      Serial.print(decodeTemp10(encodedTemp));
-      Serial.println(F(" C"));
-    }
-
-    Serial.println(F("========== END READ EEPROM ==========\n\n"));
-    while (true) { ; } // halt
-  }
-
-  // ── Clear EEPROM if requested ──────────────────────────────────────────
-  if (CLEAR_EEPROM) {
-    Serial.println(F("Clearing EEPROM..."));
-    for (int i = 0; i < EEPROM.length(); i++) EEPROM.write(i, 0);
-    Serial.println(F("EEPROM cleared."));
-  }
-
   // ── Configure timers ──────────────────────────────────────────────────
   setupTimer1(PUMP_FREQ);   // D9  — pump,  500 Hz, Phase Correct PWM
   setupTimer2(FAN_FREQ);    // D3  — fan,  25 kHz,  Fast PWM
 
   // Apply initial duty cycles
   setFanDuty(fanDuty);
+
+  // ── Initialize the SD-card logger ─────────────────────────────────────
+  pinMode(SD_CS_PIN, OUTPUT);
+  if (!SD.begin(SD_CS_PIN)) {
+    Serial.println(F("SD card initialization failed; logging disabled."));
+  } else {
+    const bool newFile = !SD.exists(LOG_FILENAME);
+    logFile = SD.open(LOG_FILENAME, FILE_WRITE);
+
+    if (!logFile) {
+      Serial.println(F("Could not open PWM26.CSV; logging disabled."));
+    } else {
+      sdReady = true;
+      if (newFile) {
+        logFile.println(F("time_ms,coolant_temp_c,fan_duty_percent,pump_duty_percent"));
+        logFile.flush();
+      }
+      Serial.println(F("SD-card logging ready at 1 Hz."));
+    }
+  }
 
   Serial.println(F("Fan/pump controller ready."));
 }
@@ -244,30 +239,6 @@ void setup() {
 void loop() {
   pumpDuty = 70;
   setPumpDuty(pumpDuty);
-
-  // ── DAQ: record temperature samples to EEPROM ─────────────────────────
-  if (daq) {
-    int sampleCount = EEPROM.length() / (int)sizeof(uint16_t);
-
-    Serial.println(F("\n\n========== START EEPROM WRITE =========="));
-
-    for (int i = 0; i < sampleCount; i++) {
-      // Non-blocking delay — hardware PWM continues unattended
-      unsigned long t0 = millis();
-      while (millis() - t0 < DELTA_TIME) { }
-
-      tC1 = adcToTemp(TEMP_PIN);
-      EEPROM.put(i * (int)sizeof(uint16_t), encodeTemp10(tC1));
-
-      Serial.print(F("Coolant Temp 3: "));
-      Serial.print(tC1);
-      Serial.println(F(" C"));
-    }
-
-    daq = false;
-    Serial.println(F("========== END EEPROM WRITE ==========\n\n"));
-    delay(2000);
-  }
 
   // ── Read temperature ──────────────────────────────────────────────────
   tC1 = adcToTemp(TEMP_PIN);
@@ -285,9 +256,16 @@ void loop() {
 
   setFanDuty(fanDuty);
 
+  // ── Append one SD-card sample per second ──────────────────────────────
+  unsigned long now = millis();
+  if (now - lastLogTime >= LOG_INTERVAL) {
+    lastLogTime = now;
+    logSample(now, tC1, fanDuty, pumpDuty);
+  }
+
   // ── Serial output every 500 ms ────────────────────────────────────────
-  if (millis() - lastPrintTime >= printInterval) {
-    lastPrintTime = millis();
+  if (now - lastPrintTime >= printInterval) {
+    lastPrintTime = now;
 
     Serial.print(F("Coolant Temp 3: "));
     Serial.print(tC1);
