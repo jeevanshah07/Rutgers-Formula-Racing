@@ -41,6 +41,7 @@ const float Beta     = 3950.0;  // Beta coefficient (K) — verify against your 
 const float T0       = 298.15;  // Nominal temperature (25 C in Kelvin)
 const float R_fixed  = 10000.0; // R3110 pull-up resistor (ohms)
 const float tempTune = 0.25;    // Fine-tune offset (C)
+const bool SERIAL_OUTPUT = false;
 
 // ── Temperature thresholds ───────────────────────────────────────────────────
 const float TEMP_LOW  = 30.0;   // Below → fans off
@@ -264,7 +265,7 @@ void loop() {
   }
 
   // ── Serial output every 500 ms ────────────────────────────────────────
-  if (now - lastPrintTime >= printInterval) {
+  if (now - lastPrintTime >= printInterval && SERIAL_OUTPUT) {
     lastPrintTime = now;
 
     Serial.print(F("Coolant Temp 3: "));
