@@ -37,7 +37,7 @@ pub const ProtocolConfig = struct {
 pub const placeholder_config = ProtocolConfig{
     .ready = false, // TODO: verify values and change to true
     .bitrate = 500_000,
-    .bms = .{ .id = 0x01, .kind = .extended, .offset = 0, .width = .one, .endian = .little },
+    .bms = .{ .id = 0x01, .kind = .extended, .offset = 0, .width = .one, .endian = .little, .multiplier = 10 },
     .inverter = .{ .id = 0x02, .kind = .extended, .offset = 0, .width = .one, .endian = .little },
     .min_voltage = 1,
     .max_voltage = 255,
