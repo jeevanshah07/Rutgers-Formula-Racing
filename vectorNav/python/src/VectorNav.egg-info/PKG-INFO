@@ -1,6 +1,0 @@
-Metadata-Version: 2.4
-Name: VectorNav
-Version: 1.0.0
-Requires-Python: >=3.8
-Requires-Dist: pybind11>=2.6.0
-Requires-Dist: pybind11-stubgen>=2.5.0
