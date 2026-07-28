@@ -4,3 +4,6 @@
 [submodule "daq-website"]
 	path = daq-website
 	url = https://github.com/rutgers-fsae/daq-website
+[submodule "vectorNav"]
+	path = vectorNav
+	url = https://github.com/rutgers-fsae/vectorNav
