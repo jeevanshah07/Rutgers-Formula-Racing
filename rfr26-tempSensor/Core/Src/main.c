@@ -32,7 +32,7 @@ typedef struct {
 #define DAQ_BASE_ID 0x18FF5000U
 #define DAQ_EXT_ID_MAX 0x1FFFFFFFU
 // #define USE_SEMIHOSTING			true
-#define SHOW_CHANNEL_TEMPS true
+// #define SHOW_CHANNEL_TEMPS true
 
 /* ---------------------------------------------------------------------------
  * Biquad IIR filter — 2nd-order Butterworth lowpass at 5 kHz
