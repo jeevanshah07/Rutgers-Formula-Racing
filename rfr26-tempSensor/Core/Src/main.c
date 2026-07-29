@@ -434,15 +434,16 @@ static void ScanAllMuxChannels(TempStatistics_t *stats, bool report) {
 		stats->min_temp = 300;
 	}
 
-#ifdef SEND_CHANNEL_TEMPS
-  for (int16_t i = 0; i < 90; i += 7) {
-      uint8_t sendTemp[7] = {0};  // zero-init so remainder bytes are 0
-      for (int16_t j = 0; j < 7 && (i + j) < 90; j++) {
-          sendTemp[j] = temps[i + j];
-      }
-      CAN_SendChannelTemp(i + 1, sendTemp);
-  }
-#endifisableAll();
+	// package all 90 channel temps into groups of 7 and send each over CAN
+	for (int16_t i = 0; i < 90; i += 7) {
+		uint8_t sendTemp[7] = {0};
+		for (int16_t j = 0; j < 7 && (i + j) < 90; j++) {
+			sendTemp[j] = temps[i + j];
+		}
+		CAN_SendChannelTemp(DAQ_BASE_ID + (i / 7), sendTemp);
+	}
+
+	MUX_DisableAll();
 }
 
 /**
