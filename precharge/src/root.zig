@@ -40,7 +40,7 @@ pub const placeholder_config = ProtocolConfig{
     .bms = .{ .id = 0x01, .kind = .extended, .offset = 0, .width = .one, .endian = .little, .multiplier = 10 },
     .inverter = .{ .id = 0x02, .kind = .extended, .offset = 0, .width = .one, .endian = .little },
     .min_voltage = 1,
-    .max_voltage = 255,
+    .max_voltage = 390,
 };
 
 pub const DecodeError = error{
