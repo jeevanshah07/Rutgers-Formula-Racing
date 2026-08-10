@@ -26,19 +26,19 @@ pub const ProtocolConfig = struct {
     bitrate: u32,
     bms: VoltageSpec,
     inverter: VoltageSpec,
-    min_voltage: u32 = 250,
-    max_voltage: u32 = 380,
+    min_voltage: u32 = 1,
+    max_voltage: u32 = 390,
     threshold_percent: u8 = 90,
-    qualifying_samples: u8 = 3,
-    freshness_timeout_ms: u32 = 1_000,
-    precharge_timeout_ms: u32 = 10_000,
+    qualifying_samples: u8 = 1,
+    freshness_timeout_ms: u32 = 100_000,
+    precharge_timeout_ms: u32 = 100_000,
 };
 
 pub const placeholder_config = ProtocolConfig{
-    .ready = false, // TODO: verify values and change to true
+    .ready = true, // TODO: verify values and change to true
     .bitrate = 500_000,
-    .bms = .{ .id = 0x01, .kind = .extended, .offset = 0, .width = .one, .endian = .little, .multiplier = 10 },
-    .inverter = .{ .id = 0x02, .kind = .extended, .offset = 0, .width = .one, .endian = .little },
+    .bms = .{ .id = 0x01, .kind = .extended, .offset = 0, .width = .two, .endian = .little, .multiplier = 10 },
+    .inverter = .{ .id = 0x02, .kind = .extended, .offset = 0, .width = .two, .endian = .little, .multiplier = 10 },
     .min_voltage = 1,
     .max_voltage = 390,
 };

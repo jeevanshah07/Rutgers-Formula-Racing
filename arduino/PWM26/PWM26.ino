@@ -41,7 +41,7 @@ const float Beta     = 3950.0;  // Beta coefficient (K) — verify against your 
 const float T0       = 298.15;  // Nominal temperature (25 C in Kelvin)
 const float R_fixed  = 10000.0; // R3110 pull-up resistor (ohms)
 const float tempTune = 0.25;    // Fine-tune offset (C)
-const bool SERIAL_OUTPUT = false;
+const bool SERIAL_OUTPUT = true;
 
 // ── Temperature thresholds ───────────────────────────────────────────────────
 const float TEMP_LOW  = 30.0;   // Below → fans off
@@ -252,8 +252,6 @@ void loop() {
   } else {
     fanDuty = 60;
   }
-
-  fanDuty = 15; 
 
   setFanDuty(fanDuty);
 
