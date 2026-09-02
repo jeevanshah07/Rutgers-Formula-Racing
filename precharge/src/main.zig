@@ -17,7 +17,7 @@ comptime {
     _ = microzig.export_startup();
 }
 
-const protocol = logic.placeholder_config;
+const protocol = logic.base_config;
 const loop_period_ms: u32 = 5;
 
 const pins = struct {
@@ -29,12 +29,11 @@ const pins = struct {
 fn systemClockConfig() !void {
     _ = try rcc.apply(.{
         .SYSCLKSource = .PLL1_P,
-        .PLLSourceVirtual = .HSE_Div_PREDIV,
+        .PLLSourceVirtual = .HSI_Div2,
         .PLLMUL = .Mul9,
         .AHBCLKDivider = .Div1,
-        .APB1CLKDivider = .Div2,
+        .APB1CLKDivider = .Div1,
         .ADCPresc = .Div6,
-        .flags = .{ .HSEOscillator = true },
     });
 }
 
@@ -102,6 +101,30 @@ fn canReceive() ?logic.Frame {
     return frame;
 }
 
+fn canTransmit(frame: logic.Frame) bool {
+    const can = peripherals.CAN;
+    const tsr = can.TSR.read();
+    const index: u2 = if (tsr.@"TME[0]" == 1)
+        0
+    else if (tsr.@"TME[1]" == 1)
+        1
+    else if (tsr.@"TME[2]" == 1)
+        2
+    else
+        return false;
+    const mailbox = &can.TX[index];
+
+    mailbox.TIR.raw = switch (frame.kind) {
+        .standard => (frame.id & 0x7FF) << 21,
+        .extended => ((frame.id & 0x1FFF_FFFF) << 3) | (1 << 2),
+    };
+    mailbox.TDTR.modify(.{ .DLC = frame.dlc });
+    mailbox.TDLR.raw = std.mem.readInt(u32, frame.data[0..4], .little);
+    mailbox.TDHR.raw = std.mem.readInt(u32, frame.data[4..8], .little);
+    mailbox.TIR.modify(.{ .TXRQ = 1 });
+    return true;
+}
+
 pub fn main() !void {
     try systemClockConfig();
 
@@ -125,6 +148,7 @@ pub fn main() !void {
     while (true) {
         while (canReceive()) |frame| controller.ingest(frame, now_ms);
         controller.tick(now_ms);
+        var info_sent = canTransmit(logic.infoFrame(controller.fault, controller));
 
         switch (controller.state) {
             .complete => {
@@ -133,12 +157,17 @@ pub fn main() !void {
             },
             .fault_latched => {
                 pins.enable.put(0);
+
+                while (!info_sent) {
+                    time.sleep_ms(loop_period_ms);
+                    info_sent = canTransmit(logic.infoFrame(controller.fault, controller));
+                }
                 while (true) time.sleep_ms(1_000);
             },
             else => {},
         }
 
         time.sleep_ms(loop_period_ms);
-        now_ms +%= loop_period_ms; // leverage wrapping addition to keep the timer going 
+        now_ms +%= loop_period_ms; // leverage wrapping addition to keep the timer going
     }
 }

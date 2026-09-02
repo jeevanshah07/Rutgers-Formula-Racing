@@ -14,11 +14,12 @@ pub const Frame = struct {
 pub const VoltageSpec = struct {
     id: u32,
     kind: FrameKind,
-    offset: u3, // bytes from the start 
+    offset: u3, // bytes from the start
     width: enum { one, two, four }, // in bytes
     endian: Endian,
     multiplier: u32 = 1,
     divisor: u32 = 1,
+    cartOffset: ?u3 = null,
 };
 
 pub const ProtocolConfig = struct {
@@ -29,18 +30,16 @@ pub const ProtocolConfig = struct {
     min_voltage: u32 = 1,
     max_voltage: u32 = 390,
     threshold_percent: u8 = 90,
-    qualifying_samples: u8 = 1,
-    freshness_timeout_ms: u32 = 100_000,
-    precharge_timeout_ms: u32 = 100_000,
+    qualifying_samples: u8 = 3,
+    freshness_timeout_ms: u32 = 30_000, // 30 sec
+    precharge_timeout_ms: u32 = 300_000, // 5 min
 };
 
-pub const placeholder_config = ProtocolConfig{
-    .ready = true, // TODO: verify values and change to true
+pub const base_config = ProtocolConfig{
+    .ready = true,
     .bitrate = 500_000,
-    .bms = .{ .id = 0x01, .kind = .extended, .offset = 0, .width = .two, .endian = .little, .multiplier = 10 },
-    .inverter = .{ .id = 0x02, .kind = .extended, .offset = 0, .width = .two, .endian = .little, .multiplier = 10 },
-    .min_voltage = 1,
-    .max_voltage = 390,
+    .bms = .{ .id = 0x6B1, .kind = .standard, .offset = 2, .width = .two, .endian = .big, .multiplier = 1, .cartOffset = 5 },
+    .inverter = .{ .id = 0x0A7, .kind = .extended, .offset = 0, .width = .two, .endian = .little, .divisor = 10 },
 };
 
 pub const DecodeError = error{
@@ -48,8 +47,24 @@ pub const DecodeError = error{
     WrongFrame,
     PayloadTooShort,
     InvalidScale,
+    InvalidCartFlag,
     Overflow,
 };
+
+pub fn checkCart(frame: Frame, spec: VoltageSpec) DecodeError!bool {
+    if (frame.remote) return error.RemoteFrame;
+    if (frame.id != spec.id or frame.kind != spec.kind) return error.WrongFrame;
+
+    const start = spec.cartOffset orelse return false;
+    if (@as(usize, frame.dlc) <= @as(usize, start)) return error.PayloadTooShort;
+
+    const raw: u32 = frame.data[start];
+    switch (raw) {
+        0 => return true, // 0 indicates charging is happening, which can only happen on the cart
+        1 => return false,
+        else => return error.InvalidCartFlag,
+    }
+}
 
 pub fn decodeVoltage(frame: Frame, spec: VoltageSpec) DecodeError!u32 {
     if (frame.remote) return error.RemoteFrame;
@@ -81,7 +96,30 @@ pub fn decodeVoltage(frame: Frame, spec: VoltageSpec) DecodeError!u32 {
 }
 
 pub const State = enum { waiting_for_bms, precharging, complete, fault_latched };
-pub const Fault = enum { configuration, malformed_frame, implausible_voltage, stale_data, timeout };
+pub const Fault = enum(u8) {
+    stale_bms = 1,
+    stale_inverter = 2,
+    configuration = 3,
+    malformed_frame = 4,
+    implausible_voltage = 5,
+    timeout = 6,
+};
+
+pub const can_id: u32 = 0x0D3;
+
+pub fn infoFrame(fault: ?Fault, controller: Controller) Frame {
+    var frame = Frame{ .id = can_id, .kind = .standard, .dlc = 5, .data = @splat(0) };
+
+    frame.data[0] = if (fault) |value| @intFromEnum(value) else 0;
+
+    if (controller.bms) |reading|
+        std.mem.writeInt(u16, frame.data[1..3], @intCast(reading.value), .big);
+
+    if (controller.inverter) |reading|
+        std.mem.writeInt(u16, frame.data[3..5], @intCast(reading.value), .big);
+
+    return frame;
+}
 
 const Reading = struct { value: u32, timestamp_ms: u32 };
 
@@ -96,10 +134,11 @@ pub const Controller = struct {
     consecutive_qualifying: u8 = 0,
 
     pub fn init(config: ProtocolConfig, now_ms: u32) Controller {
+        const valid = validConfig(config);
         return .{
             .config = config,
-            .state = if (config.ready) .waiting_for_bms else .fault_latched,
-            .fault = if (config.ready) null else .configuration,
+            .state = if (valid) .waiting_for_bms else .fault_latched,
+            .fault = if (valid) null else .configuration,
             .started_ms = now_ms,
         };
     }
@@ -108,6 +147,14 @@ pub const Controller = struct {
         if (self.state == .complete or self.state == .fault_latched) return;
 
         if (matches(frame, self.config.bms)) {
+            const cart: bool = checkCart(frame, self.config.bms) catch {
+                self.latch(.malformed_frame);
+                return;
+            };
+            if (self.state == .waiting_for_bms and cart) {
+                self.state = .complete;
+                return;
+            }
             const value = decodeVoltage(frame, self.config.bms) catch {
                 self.latch(.malformed_frame);
                 return;
@@ -136,18 +183,18 @@ pub const Controller = struct {
 
         if (self.state == .waiting_for_bms) {
             if (elapsed(now_ms, self.started_ms) >= self.config.freshness_timeout_ms)
-                self.latch(.stale_data);
+                self.latch(.stale_bms);
             return;
         }
 
-        const bms = self.bms orelse return self.latch(.stale_data);
+        const bms = self.bms orelse return self.latch(.stale_bms);
         if (elapsed(now_ms, bms.timestamp_ms) >= self.config.freshness_timeout_ms)
-            return self.latch(.stale_data);
+            return self.latch(.stale_bms);
         if (self.inverter) |reading| {
             if (elapsed(now_ms, reading.timestamp_ms) >= self.config.freshness_timeout_ms)
-                return self.latch(.stale_data);
+                return self.latch(.stale_inverter);
         } else if (elapsed(now_ms, self.precharging_started_ms.?) >= self.config.freshness_timeout_ms) {
-            return self.latch(.stale_data);
+            return self.latch(.stale_inverter);
         }
     }
 
@@ -158,7 +205,7 @@ pub const Controller = struct {
         };
         const inverter = self.inverter.?;
         if (elapsed(now_ms, bms.timestamp_ms) >= self.config.freshness_timeout_ms) {
-            self.latch(.stale_data);
+            self.latch(.stale_bms);
             return;
         }
 
@@ -187,94 +234,39 @@ fn matches(frame: Frame, spec: VoltageSpec) bool {
     return frame.id == spec.id and frame.kind == spec.kind;
 }
 
+fn validConfig(config: ProtocolConfig) bool {
+    return config.ready and
+        validSpec(config.bms) and
+        validSpec(config.inverter) and
+        !sameFrame(config.bms, config.inverter) and
+        config.min_voltage <= config.max_voltage and
+        config.threshold_percent != 0 and
+        config.threshold_percent <= 100 and
+        config.qualifying_samples != 0 and
+        config.freshness_timeout_ms != 0 and
+        config.precharge_timeout_ms != 0 and 
+        config.max_voltage <= std.math.maxInt(u16);
+}
+
+fn sameFrame(a: VoltageSpec, b: VoltageSpec) bool {
+    return a.id == b.id and a.kind == b.kind;
+}
+
+fn validSpec(spec: VoltageSpec) bool {
+    const width: usize = switch (spec.width) {
+        .one => 1,
+        .two => 2,
+        .four => 4,
+    };
+    const max_id: u32 = switch (spec.kind) {
+        .standard => 0x7FF,
+        .extended => 0x1FFF_FFFF,
+    };
+    return spec.id <= max_id and
+        @as(usize, spec.offset) + width <= 8 and
+        spec.divisor != 0;
+}
+
 fn elapsed(now: u32, then: u32) u32 {
     return now -% then;
-}
-
-fn testConfig() ProtocolConfig {
-    var config = placeholder_config;
-    config.ready = true;
-    config.bms = .{ .id = 0x100, .kind = .standard, .offset = 1, .width = .two, .endian = .big };
-    config.inverter = .{ .id = 0x101, .kind = .standard, .offset = 1, .width = .two, .endian = .big };
-    config.min_voltage = 100;
-    config.max_voltage = 1_000;
-    return config;
-}
-
-fn testFrame(id: u32, value: u16) Frame {
-    var frame = Frame{ .id = id, .kind = .standard, .dlc = 3, .data = @splat(0) };
-    std.mem.writeInt(u16, frame.data[1..3], value, .big);
-    return frame;
-}
-
-test "placeholder configuration latches safe fault" {
-    const controller = Controller.init(placeholder_config, 0);
-    try std.testing.expectEqual(State.fault_latched, controller.state);
-    try std.testing.expectEqual(Fault.configuration, controller.fault.?);
-}
-
-test "decode validates frame and payload" {
-    const config = testConfig();
-    try std.testing.expectEqual(@as(u32, 500), try decodeVoltage(testFrame(0x100, 500), config.bms));
-    var short = testFrame(0x100, 500);
-    short.dlc = 2;
-    try std.testing.expectError(error.PayloadTooShort, decodeVoltage(short, config.bms));
-    var remote = testFrame(0x100, 500);
-    remote.remote = true;
-    try std.testing.expectError(error.RemoteFrame, decodeVoltage(remote, config.bms));
-}
-
-test "three fresh samples complete precharge" {
-    var controller = Controller.init(testConfig(), 0);
-    controller.ingest(testFrame(0x100, 500), 10);
-    controller.ingest(testFrame(0x101, 449), 20);
-    try std.testing.expectEqual(@as(u8, 0), controller.consecutive_qualifying);
-    controller.ingest(testFrame(0x101, 450), 30);
-    controller.ingest(testFrame(0x101, 460), 40);
-    try std.testing.expectEqual(State.precharging, controller.state);
-    controller.ingest(testFrame(0x101, 470), 50);
-    try std.testing.expectEqual(State.complete, controller.state);
-}
-
-test "non-qualifying sample resets sequence" {
-    var controller = Controller.init(testConfig(), 0);
-    controller.ingest(testFrame(0x100, 500), 0);
-    controller.ingest(testFrame(0x101, 450), 10);
-    controller.ingest(testFrame(0x101, 440), 20);
-    controller.ingest(testFrame(0x101, 450), 30);
-    controller.ingest(testFrame(0x101, 450), 40);
-    try std.testing.expectEqual(State.precharging, controller.state);
-}
-
-test "stale data and total timeout latch faults" {
-    var stale = Controller.init(testConfig(), 0);
-    stale.ingest(testFrame(0x100, 500), 0);
-    stale.tick(1_000);
-    try std.testing.expectEqual(Fault.stale_data, stale.fault.?);
-
-    var timeout_config = testConfig();
-    timeout_config.freshness_timeout_ms = 20_000;
-    var timed_out = Controller.init(timeout_config, 0);
-    timed_out.tick(10_000);
-    try std.testing.expectEqual(Fault.timeout, timed_out.fault.?);
-}
-
-test "missing inverter data becomes stale even while BMS updates" {
-    var controller = Controller.init(testConfig(), 0);
-    controller.ingest(testFrame(0x100, 500), 100);
-    controller.ingest(testFrame(0x100, 500), 1_000);
-    controller.tick(1_100);
-    try std.testing.expectEqual(Fault.stale_data, controller.fault.?);
-}
-
-test "malformed and implausible matching frames latch faults" {
-    var malformed = Controller.init(testConfig(), 0);
-    var short = testFrame(0x100, 500);
-    short.dlc = 1;
-    malformed.ingest(short, 0);
-    try std.testing.expectEqual(Fault.malformed_frame, malformed.fault.?);
-
-    var implausible = Controller.init(testConfig(), 0);
-    implausible.ingest(testFrame(0x100, 99), 0);
-    try std.testing.expectEqual(Fault.implausible_voltage, implausible.fault.?);
 }
