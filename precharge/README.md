@@ -36,7 +36,7 @@ The test step exercises decoding, frame validation, threshold qualification,
 timeouts, plausibility checks, and fault latching on the host. The normal build
 produces the STM32 ELF and binary images.
 
->>> This project uses *microzig* version 0.15.2 which __requires__ zig 0.17.0-dev.1257+67b05e521. See `build.zig.zon` for dependancy information.
+> This project uses *microzig* version 0.15.2 which __requires__ zig 0.17.0-dev.1257+67b05e521. See `build.zig.zon` for dependancy information.
 
 
 ## Bench checklist
