@@ -36,6 +36,9 @@ The test step exercises decoding, frame validation, threshold qualification,
 timeouts, plausibility checks, and fault latching on the host. The normal build
 produces the STM32 ELF and binary images.
 
+>>> This project uses *microzig* version 0.15.2 which __requires__ zig 0.17.0-dev.1257+67b05e521. See `build.zig.zon` for dependancy information.
+
+
 ## Bench checklist
 
 1. With `ready = false`, reset the board and verify PA7 remains low.
@@ -44,6 +47,3 @@ produces the STM32 ELF and binary images.
 4. Verify readings below 90% reset the qualification sequence.
 5. Verify exactly three consecutive fresh readings at or above 90% assert PA7.
 6. Verify reset returns PA7 low before communications initialization.
-
-This firmware has no contactor feedback input. Vehicle-ready use requires a
-separate review of the final CAN contract and system-level safety behavior.

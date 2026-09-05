@@ -102,6 +102,12 @@ fn canReceive() ?logic.Frame {
 }
 
 fn canTransmit(frame: logic.Frame) bool {
+    const max_id: u32 = switch (frame.kind) {
+        .standard => 0x7FF,
+        .extended => 0x1FFF_FFFF,
+    };
+    if (frame.id > max_id or frame.dlc > 8) return false;
+
     const can = peripherals.CAN;
     const tsr = can.TSR.read();
     const index: u2 = if (tsr.@"TME[0]" == 1)
@@ -115,8 +121,8 @@ fn canTransmit(frame: logic.Frame) bool {
     const mailbox = &can.TX[index];
 
     mailbox.TIR.raw = switch (frame.kind) {
-        .standard => (frame.id & 0x7FF) << 21,
-        .extended => ((frame.id & 0x1FFF_FFFF) << 3) | (1 << 2),
+        .standard => frame.id << 21,
+        .extended => (frame.id << 3) | (1 << 2),
     };
     mailbox.TDTR.modify(.{ .DLC = frame.dlc });
     mailbox.TDLR.raw = std.mem.readInt(u32, frame.data[0..4], .little);
@@ -148,22 +154,11 @@ pub fn main() !void {
     while (true) {
         while (canReceive()) |frame| controller.ingest(frame, now_ms);
         controller.tick(now_ms);
-        var info_sent = canTransmit(logic.infoFrame(controller.fault, controller));
+        _ = canTransmit(logic.infoFrame(controller));
 
         switch (controller.state) {
-            .complete => {
-                pins.enable.put(1);
-                while (true) time.sleep_ms(1_000);
-            },
-            .fault_latched => {
-                pins.enable.put(0);
-
-                while (!info_sent) {
-                    time.sleep_ms(loop_period_ms);
-                    info_sent = canTransmit(logic.infoFrame(controller.fault, controller));
-                }
-                while (true) time.sleep_ms(1_000);
-            },
+            .complete => pins.enable.put(1),
+            .fault_latched => pins.enable.put(0),
             else => {},
         }
 

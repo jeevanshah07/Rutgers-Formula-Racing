@@ -36,7 +36,8 @@ test "fault codes and voltages map to the info CAN frame" {
     var controller = logic.Controller.init(testConfig(), 0);
     controller.ingest(testFrame(0x100, 500), 0);
     controller.ingest(testFrame(0x101, 450), 1);
-    const frame = logic.infoFrame(.stale_bms, controller);
+    controller.tick(1_000);
+    const frame = logic.infoFrame(controller);
     try std.testing.expectEqual(@as(u32, 0x0D3), frame.id);
     try std.testing.expectEqual(logic.FrameKind.standard, frame.kind);
     try std.testing.expectEqual(@as(u4, 5), frame.dlc);
@@ -91,6 +92,11 @@ test "invalid configuration latches safe fault" {
 
     config = testConfig();
     config.inverter.id = config.bms.id;
+    controller = logic.Controller.init(config, 0);
+    try std.testing.expectEqual(logic.Fault.configuration, controller.fault.?);
+
+    config = testConfig();
+    config.max_voltage = std.math.maxInt(u16) + 1;
     controller = logic.Controller.init(config, 0);
     try std.testing.expectEqual(logic.Fault.configuration, controller.fault.?);
 }

@@ -27,11 +27,11 @@ pub const ProtocolConfig = struct {
     bitrate: u32,
     bms: VoltageSpec,
     inverter: VoltageSpec,
-    min_voltage: u32 = 1,
-    max_voltage: u32 = 390,
+    min_voltage: u32 = 0,
+    max_voltage: u32 = 450,
     threshold_percent: u8 = 90,
     qualifying_samples: u8 = 3,
-    freshness_timeout_ms: u32 = 30_000, // 30 sec
+    freshness_timeout_ms: u32 = 10_000, // 10 sec
     precharge_timeout_ms: u32 = 300_000, // 5 min
 };
 
@@ -105,19 +105,19 @@ pub const Fault = enum(u8) {
     timeout = 6,
 };
 
-pub const can_id: u32 = 0x0D3;
+pub const info_can_id: u32 = 0x0D3;
 
-pub fn infoFrame(fault: ?Fault, controller: Controller) Frame {
-    var frame = Frame{ .id = can_id, .kind = .standard, .dlc = 5, .data = @splat(0) };
-
-    frame.data[0] = if (fault) |value| @intFromEnum(value) else 0;
-
+pub fn infoFrame(controller: Controller) Frame {
+    var frame = Frame{ .id = info_can_id, .kind = .standard, .dlc = 5, .data = @splat(0) };
+    frame.data[0] = if (controller.fault) |fault| @intFromEnum(fault) else switch (controller.state) {
+        .complete => 7,
+        .precharging => 8,
+        else => 0
+    };
     if (controller.bms) |reading|
         std.mem.writeInt(u16, frame.data[1..3], @intCast(reading.value), .big);
-
     if (controller.inverter) |reading|
         std.mem.writeInt(u16, frame.data[3..5], @intCast(reading.value), .big);
-
     return frame;
 }
 
@@ -159,8 +159,8 @@ pub const Controller = struct {
                 self.latch(.malformed_frame);
                 return;
             };
-            if (!self.plausible(value)) return self.latch(.implausible_voltage);
             self.bms = .{ .value = value, .timestamp_ms = now_ms };
+            if (!self.plausible(value)) return self.latch(.implausible_voltage);
             if (self.state == .waiting_for_bms) {
                 self.state = .precharging;
                 self.precharging_started_ms = now_ms;
@@ -170,8 +170,8 @@ pub const Controller = struct {
                 self.latch(.malformed_frame);
                 return;
             };
-            if (!self.plausible(value)) return self.latch(.implausible_voltage);
             self.inverter = .{ .value = value, .timestamp_ms = now_ms };
+            if (!self.plausible(value)) return self.latch(.implausible_voltage);
             self.qualify(now_ms);
         }
     }
@@ -244,7 +244,7 @@ fn validConfig(config: ProtocolConfig) bool {
         config.threshold_percent <= 100 and
         config.qualifying_samples != 0 and
         config.freshness_timeout_ms != 0 and
-        config.precharge_timeout_ms != 0 and 
+        config.precharge_timeout_ms != 0 and
         config.max_voltage <= std.math.maxInt(u16);
 }
 
